@@ -66,7 +66,7 @@ def main():
 
     train_loader, test_loader = get_cifar10_loaders(batch_size=args.batch_size)
     dense_model, dense_acc, initial_weights = train_dense_model(
-        train_loader, test_loader, device, args.seed, args.epochs_dense
+        train_loader, test_loader, device, args.epochs_dense
     )
     print(f"\nDense Model Accuracy: {dense_acc:.2f}%")
         
