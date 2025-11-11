@@ -16,7 +16,7 @@ from trainer import SimpleTrainer
 from pruning import magnitude_pruning, obd_pruning, lottery_ticket_pruning, calculate_sparsity
 
 
-def train_dense_model(train_loader, test_loader, device, seed, epochs=200):
+def train_dense_model(train_loader, test_loader, device, epochs):
     model = create_model()
     initial_weights = {name: param.data.clone() for name, param in model.named_parameters()}
     
@@ -34,8 +34,6 @@ def apply_pruning_and_evaluate(model, train_loader, test_loader, device, method,
     elif method == 'obd':
         pruned_model = obd_pruning(model, train_loader, device, sparsity, num_batches=10)
     elif method == 'lottery_ticket':
-        if initial_weights is None:
-            raise ValueError("Initial weights required for lottery ticket pruning")
         pruned_model = lottery_ticket_pruning(model, initial_weights, sparsity, device=device)
     
     actual_sparsity = calculate_sparsity(pruned_model)
@@ -80,10 +78,11 @@ def main():
             args.epochs_prune, initial_weights if method == 'lottery_ticket' else None
         )
         results[method] = {
+            'pruned_model': pruned_model,
             'accuracy': pruned_acc,
             'sparsity': actual_sparsity
         }
-        print(f"\n{method.upper()} - Accuracy: {pruned_acc:.2f}%, Sparsity: {actual_sparsity:.2%}")
+        print(f"\n{method} - Accuracy: {pruned_acc:.2f}%, Sparsity: {actual_sparsity:.2%}")
     
     # 결과 요약
     print(f"\n{'='*50}")

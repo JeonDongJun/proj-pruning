@@ -3,22 +3,14 @@ import torch.nn as nn
 import numpy as np
 import copy
 
-
-def magnitude_pruning(model, sparsity, device=None):
+def magnitude_pruning(model, sparsity, device):
     """
     Method A: Magnitude-based Pruning
     가장 작은 절댓값을 가진 가중치를 제거
     """
     model = copy.deepcopy(model)
-    
-    # 디바이스 정보 유지
-    if device is None:
-        # 모델의 첫 번째 파라미터에서 디바이스 확인
-        device = next(model.parameters()).device
-    
     model = model.to(device)
     
-    # 모든 파라미터 수집
     all_weights = []
     for param in model.parameters():
         if len(param.data.shape) >= 2:  # Conv, Linear 레이어만
@@ -44,7 +36,6 @@ def obd_pruning(model, train_loader, device, sparsity, num_batches=10):
     """
     Method B: OBD (Optimal Brain Damage) Pruning
     헤시안의 대각 성분을 직접 계산하여 pruning
-    Saliency = 0.5 * H_ii * w_i^2
     """
     model = copy.deepcopy(model)
     model.train()
@@ -76,21 +67,19 @@ def obd_pruning(model, train_loader, device, sparsity, num_batches=10):
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             
-            # 첫 번째 gradient 계산 (create_graph=True로 설정하여 2차 미분 가능하게)
+            # 첫 번째 gradient 계산
             grad = torch.autograd.grad(
                 loss, param, create_graph=True, retain_graph=True
             )[0]
             
             if grad is not None:
-                # 헤시안 대각 성분 계산: H_ii = ∂²L/∂w_i²
-                # 각 파라미터 원소에 대해 개별적으로 계산
+                # 헤시안 대각 성분 계산
                 param_flat = param.data.flatten()
                 grad_flat = grad.flatten()
                 hessian_flat = torch.zeros_like(param_flat)
                 
                 # 각 원소에 대해 헤시안 대각 성분 계산
                 for i in range(param_flat.numel()):
-                    # grad[i]에 대한 gradient를 계산하면 헤시안 대각 성분
                     hessian_elem = torch.autograd.grad(
                         grad_flat[i], param, retain_graph=True
                     )[0]
@@ -98,21 +87,18 @@ def obd_pruning(model, train_loader, device, sparsity, num_batches=10):
                     if hessian_elem is not None:
                         hessian_flat[i] = hessian_elem.flatten()[i]
                 
-                # 누적
                 hessian_diag[name] += hessian_flat.reshape(param.data.shape)
         
         batch_count += 1
     
-    # 평균 계산
     if batch_count > 0:
         for name in hessian_diag:
             hessian_diag[name] /= batch_count
     
-    # Saliency 계산: S_i = 0.5 * H_ii * w_i^2
+    # Saliency 계산
     all_saliencies = []
     for name, param in model.named_parameters():
         if name in hessian_diag:
-            # 0.5는 상수이므로 순위에 영향 없어 생략 가능
             saliency = hessian_diag[name] * param.data.pow(2)
             all_saliencies.append(saliency.flatten())
     
@@ -131,17 +117,12 @@ def obd_pruning(model, train_loader, device, sparsity, num_batches=10):
     return model
 
 
-def lottery_ticket_pruning(model, initial_weights, sparsity, device=None):
+def lottery_ticket_pruning(model, initial_weights, sparsity, device):
     """
     Method C: Lottery Ticket Pruning
     초기 가중치를 저장하고, magnitude pruning 후 초기 가중치로 복원
     """
     model = copy.deepcopy(model)
-    
-    # 디바이스 정보 유지
-    if device is None:
-        device = next(model.parameters()).device
-    
     model = model.to(device)
     
     # Magnitude 기반으로 마스크 생성
