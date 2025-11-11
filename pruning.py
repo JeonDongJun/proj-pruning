@@ -35,13 +35,14 @@ def magnitude_pruning(model, sparsity, device):
 def obd_pruning(model, train_loader, device, sparsity, num_batches=10):
     """
     Method B: OBD (Optimal Brain Damage) Pruning
-    헤시안의 대각 성분을 직접 계산하여 pruning
+    헤시안의 대각 성분을 Fisher Information Matrix로 근사하여 계산
+    H_ii ≈ E[(∂L/∂w_i)^2] = Fisher Information의 대각 성분
     """
     model = copy.deepcopy(model)
     model.train()
     criterion = nn.CrossEntropyLoss()
     
-    # 헤시안 대각 성분을 저장할 딕셔너리
+    # 헤시안 대각 성분 (Fisher Information으로 근사)을 저장할 딕셔너리
     hessian_diag = {}
     for name, param in model.named_parameters():
         if len(param.data.shape) >= 2:  # Conv, Linear 레이어만
@@ -58,47 +59,30 @@ def obd_pruning(model, train_loader, device, sparsity, num_batches=10):
         inputs = batch['pixel_values'].to(device)
         labels = batch['label'].to(device)
         
-        # 각 파라미터에 대해 헤시안 대각 성분 계산
+        model.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        
+        # 각 파라미터에 대해 gradient의 제곱을 누적 (Fisher Information 근사)
         for name, param in model.named_parameters():
-            if name not in hessian_diag:
-                continue
-            
-            model.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            
-            # 첫 번째 gradient 계산
-            grad = torch.autograd.grad(
-                loss, param, create_graph=True, retain_graph=True
-            )[0]
-            
-            if grad is not None:
-                # 헤시안 대각 성분 계산
-                param_flat = param.data.flatten()
-                grad_flat = grad.flatten()
-                hessian_flat = torch.zeros_like(param_flat)
-                
-                # 각 원소에 대해 헤시안 대각 성분 계산
-                for i in range(param_flat.numel()):
-                    hessian_elem = torch.autograd.grad(
-                        grad_flat[i], param, retain_graph=True
-                    )[0]
-                    
-                    if hessian_elem is not None:
-                        hessian_flat[i] = hessian_elem.flatten()[i]
-                
-                hessian_diag[name] += hessian_flat.reshape(param.data.shape)
+            if name in hessian_diag and param.grad is not None:
+                # Fisher Information: F_ii = E[(∂L/∂w_i)^2]
+                # 헤시안 대각 성분의 근사로 사용
+                hessian_diag[name] += param.grad.data.pow(2)
         
         batch_count += 1
     
+    # 평균 계산
     if batch_count > 0:
         for name in hessian_diag:
             hessian_diag[name] /= batch_count
     
-    # Saliency 계산
+    # Saliency 계산: S_i = 0.5 * H_ii * w_i^2
     all_saliencies = []
     for name, param in model.named_parameters():
         if name in hessian_diag:
+            # 0.5는 상수이므로 순위에 영향 없어 생략 가능
             saliency = hessian_diag[name] * param.data.pow(2)
             all_saliencies.append(saliency.flatten())
     

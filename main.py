@@ -130,11 +130,13 @@ def run_experiment_with_seeds(sparsities, methods, seeds, epochs_dense, epochs_p
         dense_model, dense_acc, initial_weights = train_dense_model(
             train_loader, test_loader, device, epochs_dense
         )
-        print(f"Dense Model Accuracy: {dense_acc:.2f}%")
         
         dense_params = count_parameters(dense_model)
         dense_size = get_model_size_mb(dense_model)
         dense_latency = measure_inference_latency(dense_model, test_loader, device)
+        
+        print(f"Dense Model Accuracy: {dense_acc:.2f}%")
+        print(f"  Params: {dense_params:.2f}M, Size: {dense_size:.2f}MB, Latency: {dense_latency:.2f}ms")
         
         all_results['dense']['accuracy'].append(dense_acc)
         all_results['dense']['sparsity'].append(0.0)
@@ -156,6 +158,7 @@ def run_experiment_with_seeds(sparsities, methods, seeds, epochs_dense, epochs_p
                     'size': model_size,
                     'latency': latency
                 })
+                print(f"Method: {method}, Sparsity: {sparsity:.2f}")
                 print(f"Result: Acc={pruned_acc:.2f}%, Sparsity={actual_sparsity:.2%}, Params={num_params:.2f}M, Size={model_size:.2f}MB, Latency={latency:.2f}ms")
 
     return all_results
@@ -335,7 +338,14 @@ def main():
         dense_model, dense_acc, initial_weights = train_dense_model(
             train_loader, test_loader, device, args.epochs_dense
         )
+        
+        # Dense model 통계 계산
+        dense_params = count_parameters(dense_model)
+        dense_size = get_model_size_mb(dense_model)
+        dense_latency = measure_inference_latency(dense_model, test_loader, device)
+        
         print(f"\nDense Model Accuracy: {dense_acc:.2f}%")
+        print(f"  Params: {dense_params:.2f}M, Size: {dense_size:.2f}MB, Latency: {dense_latency:.2f}ms")
         
         results = {}
         for method in methods:
@@ -356,9 +366,9 @@ def main():
         print(f"\n{'='*50}")
         print("Results Summary")
         print(f"{'='*50}")
-        print(f"Dense Model: {dense_acc:.2f}%")
+        print(f"Dense Model: {dense_acc:.2f}% (Params: {dense_params:.2f}M, Size: {dense_size:.2f}MB, Latency: {dense_latency:.2f}ms)")
         for method, result in results.items():
-            print(f"{method}: {result['accuracy']:.2f}% (Sparsity: {result['sparsity']:.2%})")
+            print(f"{method}: {result['accuracy']:.2f}% (Sparsity: {result['sparsity']:.2%}, Params: {result['params']:.2f}M, Size: {result['size']:.2f}MB, Latency: {result['latency']:.2f}ms)")
 
 if __name__ == '__main__':
     main()
