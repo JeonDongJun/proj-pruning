@@ -4,26 +4,11 @@
 
 # 기본 설정
 SEED=42
-EPOCHS_DENSE=100
-EPOCHS_PRUNE=50
-BATCH_SIZE=512
-SPARSITY=0.5
+EPOCHS_DENSE=50
+EPOCHS_PRUNE=10
+BATCH_SIZE=256
 
-# Dense 모델 학습
-echo "Training Dense Model..."
-python main.py --seed $SEED --epochs_dense $EPOCHS_DENSE --batch_size $BATCH_SIZE --method magnitude --sparsity 0.0
-
-# Pruning 실험 (3가지 방법, 여러 sparsity 레벨)
+# Pruning 실험
 SPARSITIES=(0.3 0.5 0.7 0.9)
-METHODS=("magnitude" "obd" "lottery_ticket")
-
-for method in "${METHODS[@]}"; do
-    for sparsity in "${SPARSITIES[@]}"; do
-        echo "Running $method pruning with sparsity $sparsity..."
-        python main.py --seed $SEED --epochs_dense $EPOCHS_DENSE --epochs_prune $EPOCHS_PRUNE \
-            --batch_size $BATCH_SIZE --method $method --sparsity $sparsity
-    done
-done
-
+python main.py --generate_plots --seeds $SEED --sparsities ${SPARSITIES[@]} --method all --epochs_dense $EPOCHS_DENSE --epochs_prune $EPOCHS_PRUNE --batch_size $BATCH_SIZE
 echo "All experiments completed!"
-

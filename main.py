@@ -330,8 +330,6 @@ def main():
         
     else:
         torch.manual_seed(args.seed)
-        np.random.seed(args.seed)
-        random.seed(args.seed)
         
         train_loader, test_loader = get_cifar10_loaders(batch_size=args.batch_size)
         dense_model, dense_acc, initial_weights = train_dense_model(
