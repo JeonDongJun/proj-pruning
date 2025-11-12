@@ -30,19 +30,38 @@ def train_dense_model(train_loader, test_loader, device, epochs):
     return model, best_acc, initial_weights
 
 
-def count_parameters(model):
-    """모델의 파라미터 수를 계산 (M 단위)"""
-    total = sum(p.numel() for p in model.parameters())
+def count_parameters(model, count_nonzero_only=False):
+    """모델의 파라미터 수를 계산 (M 단위)
+    
+    Args:
+        count_nonzero_only: True면 non-zero 파라미터만 카운트 (프루닝된 모델용)
+    """
+    if count_nonzero_only:
+        total = sum((p != 0).sum().item() for p in model.parameters())
+    else:
+        total = sum(p.numel() for p in model.parameters())
     return total / 1e6  # Million 단위
 
-def get_model_size_mb(model):
-    """모델 크기를 계산 (MB 단위)"""
+def get_model_size_mb(model, sparse_format=False):
+    """모델 크기를 계산 (MB 단위)
+    
+    Args:
+        sparse_format: True면 non-zero 파라미터만 카운트 (sparse format으로 저장했을 때의 크기)
+    """
     param_size = 0
     buffer_size = 0
     
-    for param in model.parameters():
-        param_size += param.nelement() * param.element_size()
+    if sparse_format:
+        # Sparse format: non-zero 파라미터만 카운트
+        for param in model.parameters():
+            non_zero_count = (param != 0).sum().item()
+            param_size += non_zero_count * param.element_size()
+    else:
+        # Dense format: 모든 파라미터 카운트
+        for param in model.parameters():
+            param_size += param.nelement() * param.element_size()
     
+    # Buffer는 항상 전체 카운트 (BatchNorm 등)
     for buffer in model.buffers():
         buffer_size += buffer.nelement() * buffer.element_size()
     
@@ -105,9 +124,9 @@ def apply_pruning_and_evaluate(model, train_loader, test_loader, device, method,
     trainer = SimpleTrainer(pruned_model, device, lr=0.01)
     best_acc = trainer.train(train_loader, test_loader, epochs)
     
-    # 통계 계산
-    num_params = count_parameters(pruned_model)
-    model_size = get_model_size_mb(pruned_model)
+    # 통계 계산 (프루닝된 모델은 non-zero 파라미터만 카운트)
+    num_params = count_parameters(pruned_model, count_nonzero_only=True)
+    model_size = get_model_size_mb(pruned_model, sparse_format=True)
     latency = measure_inference_latency(pruned_model, test_loader, device)
     
     return pruned_model, best_acc, actual_sparsity, num_params, model_size, latency
