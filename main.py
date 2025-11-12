@@ -8,7 +8,6 @@ Reference: https://docs.pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.ht
 import argparse
 import torch
 import numpy as np
-import random
 import os
 import time
 import matplotlib.pyplot as plt
@@ -21,6 +20,7 @@ from pruning import magnitude_pruning, obd_pruning, lottery_ticket_pruning, calc
 
 
 def train_dense_model(train_loader, test_loader, device, epochs):
+    """Dense 모델 학습"""
     model = create_model()
     initial_weights = {name: param.data.clone() for name, param in model.named_parameters()}
     
@@ -31,41 +31,26 @@ def train_dense_model(train_loader, test_loader, device, epochs):
 
 
 def count_parameters(model, count_nonzero_only=False, eps=1e-8):
-    """모델의 파라미터 수를 계산 (M 단위)
-    
-    Args:
-        count_nonzero_only: True면 non-zero 파라미터만 카운트 (프루닝된 모델용)
-        eps: 0으로 간주할 임계값 (매우 작은 값도 0으로 처리)
-    """
+    """모델 파라미터 수 계산 (M 단위)"""
     if count_nonzero_only:
-        # 절댓값이 eps보다 큰 파라미터만 카운트
         total = sum((p.abs() > eps).sum().item() for p in model.parameters())
     else:
         total = sum(p.numel() for p in model.parameters())
-    return total / 1e6  # Million 단위
+    return total / 1e6
 
 def get_model_size_mb(model, sparse_format=False, eps=1e-8):
-    """모델 크기를 계산 (MB 단위)
-    
-    Args:
-        sparse_format: True면 non-zero 파라미터만 카운트 (sparse format으로 저장했을 때의 크기)
-        eps: 0으로 간주할 임계값 (매우 작은 값도 0으로 처리)
-    """
+    """모델 크기 계산 (MB 단위)"""
     param_size = 0
     buffer_size = 0
     
     if sparse_format:
-        # Sparse format: non-zero 파라미터만 카운트
         for param in model.parameters():
-            # 절댓값이 eps보다 큰 파라미터만 카운트
             non_zero_count = (param.abs() > eps).sum().item()
             param_size += non_zero_count * param.element_size()
     else:
-        # Dense format: 모든 파라미터 카운트
         for param in model.parameters():
             param_size += param.nelement() * param.element_size()
     
-    # Buffer는 항상 전체 카운트 (BatchNorm 등)
     for buffer in model.buffers():
         buffer_size += buffer.nelement() * buffer.element_size()
     
@@ -77,7 +62,6 @@ def measure_inference_latency(model, test_loader, device, num_samples=100):
     model.eval()
     model.to(device)
     
-    # Warm-up
     with torch.no_grad():
         for i, batch in enumerate(test_loader):
             if i >= 10:
@@ -85,7 +69,6 @@ def measure_inference_latency(model, test_loader, device, num_samples=100):
             inputs = batch['pixel_values'].to(device)
             _ = model(inputs)
     
-    # 측정
     latencies = []
     with torch.no_grad():
         sample_count = 0
@@ -105,15 +88,14 @@ def measure_inference_latency(model, test_loader, device, num_samples=100):
             
             end_time = time.time()
             batch_size = inputs.size(0)
-            latency_per_image = (end_time - start_time) / batch_size * 1000  # ms
+            latency_per_image = (end_time - start_time) / batch_size * 1000
             latencies.extend([latency_per_image] * batch_size)
             sample_count += batch_size
     
     return np.mean(latencies)
 
-def apply_pruning_and_evaluate(model, train_loader, test_loader, device, method, sparsity, epochs=50, initial_weights=None):    
-    # Pruning 적용 후 fine-tuning 및 평가
-
+def apply_pruning_and_evaluate(model, train_loader, test_loader, device, method, sparsity, epochs=50, initial_weights=None):
+    """Pruning 적용 후 fine-tuning 및 평가"""
     if method == 'magnitude':
         pruned_model = magnitude_pruning(model, sparsity, device=device)
     elif method == 'obd':
@@ -122,42 +104,28 @@ def apply_pruning_and_evaluate(model, train_loader, test_loader, device, method,
         pruned_model = lottery_ticket_pruning(model, initial_weights, sparsity, device=device)
     
     actual_sparsity = calculate_sparsity(pruned_model)
-    print(f"Actual Sparsity (after pruning, before fine-tuning): {actual_sparsity:.2%}")
     
-    # Pruning mask 저장 (fine-tuning 후에도 0 유지하기 위해)
     pruning_masks = {}
     for name, param in pruned_model.named_parameters():
-        if len(param.data.shape) >= 2:  # Conv, Linear 레이어만
+        if len(param.data.shape) >= 2:
             pruning_masks[name] = (param.data.abs() > 1e-8).float()
     
-    # Fine-tuning 전 파라미터 수 확인
-    params_before_ft = count_parameters(pruned_model, count_nonzero_only=True)
-    print(f"Non-zero params before fine-tuning: {params_before_ft:.2f}M")
-    
-    # Fine-tuning
     trainer = SimpleTrainer(pruned_model, device, lr=0.01)
     best_acc = trainer.train(train_loader, test_loader, epochs)
     
-    # Fine-tuning 후 pruning mask 다시 적용 (0으로 만든 가중치를 다시 0으로)
     for name, param in pruned_model.named_parameters():
         if name in pruning_masks:
             param.data *= pruning_masks[name].to(param.data.device)
     
-    # Fine-tuning 후 sparsity 재계산
-    actual_sparsity_after = calculate_sparsity(pruned_model)
-    print(f"Actual Sparsity (after fine-tuning, mask reapplied): {actual_sparsity_after:.2%}")
-    
-    # 통계 계산 (프루닝된 모델은 non-zero 파라미터만 카운트)
     num_params = count_parameters(pruned_model, count_nonzero_only=True)
     model_size = get_model_size_mb(pruned_model, sparse_format=True)
     latency = measure_inference_latency(pruned_model, test_loader, device)
-    
-    print(f"Non-zero params after fine-tuning: {num_params:.2f}M")
     
     return pruned_model, best_acc, actual_sparsity, num_params, model_size, latency
 
 
 def run_experiment_with_seeds(sparsities, methods, seeds, epochs_dense, epochs_prune, batch_size, device):
+    """여러 seed에 대해 실험 실행하여 결과 수집"""
     all_results = {method: {sparsity: [] for sparsity in sparsities} for method in methods}
     all_results['dense'] = {
         'accuracy': [],
@@ -208,6 +176,7 @@ def run_experiment_with_seeds(sparsities, methods, seeds, epochs_dense, epochs_p
     return all_results
 
 def calculate_ci(data, confidence=0.95):
+    """신뢰구간 계산"""
     if len(data) == 0:
         return 0, 0
     mean = np.mean(data)
@@ -216,6 +185,7 @@ def calculate_ci(data, confidence=0.95):
     return mean, h
 
 def plot_tradeoff_curve(all_results, methods, sparsities, output_dir='results'):
+    """Tradeoff curve 그래프 생성"""
     os.makedirs(output_dir, exist_ok=True)
     
     plt.figure(figsize=(10, 6))
@@ -269,11 +239,11 @@ def plot_tradeoff_curve(all_results, methods, sparsities, output_dir='results'):
     plt.close()
 
 def create_efficiency_table(all_results, methods, sparsities, output_dir='results'):
+    """Efficiency table 생성 및 저장"""
     os.makedirs(output_dir, exist_ok=True)
     
     table_data = []
     
-    # Dense 모델
     dense_accs = all_results['dense']['accuracy']
     dense_params = all_results['dense']['params']
     dense_sizes = all_results['dense']['size']
@@ -369,10 +339,7 @@ def main():
             args.epochs_dense, args.epochs_prune, args.batch_size, device
         )
         
-        # Tradeoff curve 생성
         plot_tradeoff_curve(all_results, methods, args.sparsities, args.output_dir)
-        
-        # Efficiency table 생성
         create_efficiency_table(all_results, methods, args.sparsities, args.output_dir)
         
     else:
@@ -383,7 +350,6 @@ def main():
             train_loader, test_loader, device, args.epochs_dense
         )
         
-        # Dense model 통계 계산
         dense_params = count_parameters(dense_model)
         dense_size = get_model_size_mb(dense_model)
         dense_latency = measure_inference_latency(dense_model, test_loader, device)
