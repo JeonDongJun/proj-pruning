@@ -30,23 +30,26 @@ def train_dense_model(train_loader, test_loader, device, epochs):
     return model, best_acc, initial_weights
 
 
-def count_parameters(model, count_nonzero_only=False):
+def count_parameters(model, count_nonzero_only=False, eps=1e-8):
     """모델의 파라미터 수를 계산 (M 단위)
     
     Args:
         count_nonzero_only: True면 non-zero 파라미터만 카운트 (프루닝된 모델용)
+        eps: 0으로 간주할 임계값 (매우 작은 값도 0으로 처리)
     """
     if count_nonzero_only:
-        total = sum((p != 0).sum().item() for p in model.parameters())
+        # 절댓값이 eps보다 큰 파라미터만 카운트
+        total = sum((p.abs() > eps).sum().item() for p in model.parameters())
     else:
         total = sum(p.numel() for p in model.parameters())
     return total / 1e6  # Million 단위
 
-def get_model_size_mb(model, sparse_format=False):
+def get_model_size_mb(model, sparse_format=False, eps=1e-8):
     """모델 크기를 계산 (MB 단위)
     
     Args:
         sparse_format: True면 non-zero 파라미터만 카운트 (sparse format으로 저장했을 때의 크기)
+        eps: 0으로 간주할 임계값 (매우 작은 값도 0으로 처리)
     """
     param_size = 0
     buffer_size = 0
@@ -54,7 +57,8 @@ def get_model_size_mb(model, sparse_format=False):
     if sparse_format:
         # Sparse format: non-zero 파라미터만 카운트
         for param in model.parameters():
-            non_zero_count = (param != 0).sum().item()
+            # 절댓값이 eps보다 큰 파라미터만 카운트
+            non_zero_count = (param.abs() > eps).sum().item()
             param_size += non_zero_count * param.element_size()
     else:
         # Dense format: 모든 파라미터 카운트
@@ -118,16 +122,37 @@ def apply_pruning_and_evaluate(model, train_loader, test_loader, device, method,
         pruned_model = lottery_ticket_pruning(model, initial_weights, sparsity, device=device)
     
     actual_sparsity = calculate_sparsity(pruned_model)
-    print(f"Actual Sparsity: {actual_sparsity:.2%}")
+    print(f"Actual Sparsity (after pruning, before fine-tuning): {actual_sparsity:.2%}")
+    
+    # Pruning mask 저장 (fine-tuning 후에도 0 유지하기 위해)
+    pruning_masks = {}
+    for name, param in pruned_model.named_parameters():
+        if len(param.data.shape) >= 2:  # Conv, Linear 레이어만
+            pruning_masks[name] = (param.data.abs() > 1e-8).float()
+    
+    # Fine-tuning 전 파라미터 수 확인
+    params_before_ft = count_parameters(pruned_model, count_nonzero_only=True)
+    print(f"Non-zero params before fine-tuning: {params_before_ft:.2f}M")
     
     # Fine-tuning
     trainer = SimpleTrainer(pruned_model, device, lr=0.01)
     best_acc = trainer.train(train_loader, test_loader, epochs)
     
+    # Fine-tuning 후 pruning mask 다시 적용 (0으로 만든 가중치를 다시 0으로)
+    for name, param in pruned_model.named_parameters():
+        if name in pruning_masks:
+            param.data *= pruning_masks[name].to(param.data.device)
+    
+    # Fine-tuning 후 sparsity 재계산
+    actual_sparsity_after = calculate_sparsity(pruned_model)
+    print(f"Actual Sparsity (after fine-tuning, mask reapplied): {actual_sparsity_after:.2%}")
+    
     # 통계 계산 (프루닝된 모델은 non-zero 파라미터만 카운트)
     num_params = count_parameters(pruned_model, count_nonzero_only=True)
     model_size = get_model_size_mb(pruned_model, sparse_format=True)
     latency = measure_inference_latency(pruned_model, test_loader, device)
+    
+    print(f"Non-zero params after fine-tuning: {num_params:.2f}M")
     
     return pruned_model, best_acc, actual_sparsity, num_params, model_size, latency
 
